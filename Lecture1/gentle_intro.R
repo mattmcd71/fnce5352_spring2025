@@ -12,7 +12,7 @@ x <- 3 + 5
 
 y <- c(1, 2, 3, 4, 5)
 
-seq(0, 10, by=2)
+seq(to=10, from=0,  by=2)
 
 # Custom Functions
 
@@ -26,7 +26,7 @@ add_pi(3)
 
 library(ggplot2)
 
-ggplot(mtcars, aes(x=hp, y=mpg)) +
+plot <- ggplot(mtcars, aes(x=hp, y=mpg)) +
   geom_point() +
   geom_smooth(method = lm, se=TRUE) + 
   labs(x='Horsepower', 
@@ -48,8 +48,8 @@ sqrt(exp(sqrt(2)))
 
 2 %>% 
   sqrt %>%
-  exp %>%
-  sqrt
+        exp %>%
+      sqrt
 
 
 df_cars <- as_tibble(mtcars)

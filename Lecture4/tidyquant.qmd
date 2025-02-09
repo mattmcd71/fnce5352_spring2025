@@ -1,0 +1,434 @@
+---
+title: "Intro To Tidyquant"
+author: "Matthew McDonald"
+format: 
+  revealjs:
+    slide-number: true
+execute: 
+  echo: true
+  eval: true
+  warning: false
+editor: source
+---
+
+# Working with Stock Market Data
+
+## Loading Packages
+
+::: columns
+::: {.column width="50%"}
+```{r}
+#| message: false
+library(tidyverse)
+library(tidyquant)
+library(scales)
+```
+:::
+
+::: {.column width="50%"}
+There are two packages you haven't seen:
+
+-   **tidyquant**: a package that helps facilitate analysis of financial data in the tidyverse
+
+-   **scales**: provides useful scale functions for visualizations
+:::
+:::
+
+## Accessing Stock Data
+
+```{r}
+#| message: false
+#| cache: true
+prices <- tq_get("AAPL",
+  get = "stock.prices",
+  from = "2000-01-01",
+  to = "2022-12-31"
+)
+prices
+```
+
+## tq_get
+
+-   `tq_get` downloads stock market data from Yahoo!Finance if you do not specify another data source. 
+-   The `adjusted` prices are corrected for anything that might affect the stock price after the market closes, e.g., stock splits and dividends.
+
+## Plotting with ggplot2 {.smaller}
+
+```{r}
+#| fig-cap: "Prices are in USD, adjusted for dividend payments and stock splits."
+prices |>
+  ggplot(aes(x = date, y = adjusted)) +
+  geom_line() +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = "Apple stock prices between beginning of 2000 and end of 2022"
+  )
+```
+
+## Calculating Returns {.smaller}
+
+Instead of analyzing prices, we compute daily net returns defined as $r_t = p_t / p_{t-1} - 1$, where $p_t$ is the adjusted day $t$ price. In that context, the function `lag()` is helpful, which returns the previous value in a vector.
+
+```{r}
+returns <- prices |>
+  arrange(date) |>
+  mutate(ret = adjusted / lag(adjusted) - 1) |>
+  select(symbol, date, ret)
+returns
+```
+
+## Removing NA Records
+
+```{r}
+returns <- returns |>
+  drop_na(ret)
+returns
+```
+
+## Visualizing Returns {.smaller}
+
+```{r}
+#| fig-width: 6
+#| fig-height: 3
+quantile_05 <- quantile(returns |> pull(ret), probs = 0.05)
+returns |>
+  ggplot(aes(x = ret)) +
+  geom_histogram(bins = 100) +
+  geom_vline(aes(xintercept = quantile_05),
+    linetype = "dashed"
+  ) +
+  labs(x = NULL, y = NULL,
+    title = "Distribution of daily Apple stock returns"
+  ) +
+  scale_x_continuous(labels = percent)
+```
+
+## Summarizing Returns
+
+```{r}
+returns |>
+  summarize(across(
+    ret,
+    list(
+      daily_mean = mean,
+      daily_sd = sd,
+      daily_min = min,
+      daily_max = max
+    )
+  ))
+```
+
+## Summarizing Using group_by {.smaller}
+
+```{r}
+#| output-location: column
+returns |>
+  group_by(year = year(date)) |>
+  summarize(across(
+    ret,
+    list(
+      daily_mean = mean,
+      daily_sd = sd,
+      daily_min = min,
+      daily_max = max
+    ),
+    .names = "{.fn}"
+  )) |>
+  print(n = Inf)
+```
+
+## The across function
+
+The across function allows you to apply a function (or functions) across multiple columns. It can also be used in the function `mutate`.
+
+In case you wonder: the additional argument `.names = "{.fn}"` in `across()` determines how to name the output columns. The specification is rather flexible and allows almost arbitrary column names, which can be useful for reporting. The `print()` function simply controls the output options for the R console.
+
+# Scaling Up the Analysis
+
+## Incorporating more tickers 
+
+```{r}
+#| message: false
+symbols <- tq_index("DOW") |> 
+  filter(company != "US DOLLAR")
+symbols
+```
+
+## Using tq_get for the Dow
+
+```{r}
+#| cache: true
+index_prices <- tq_get(symbols,
+  get = "stock.prices",
+  from = "2000-01-01",
+  to = "2022-12-31"
+)
+```
+
+The resulting tibble contains `r nrow(index_prices)` daily observations for `r index_prices |> count(company) |> nrow()` different corporations. 
+
+## Plotting The Constituent Prices
+
+```{r}
+#| output-location: slide
+index_prices |>
+  ggplot(aes(
+    x = date,
+    y = adjusted,
+    color = symbol
+  )) +
+  geom_line() +
+  labs(
+    x = NULL,
+    y = NULL,
+    color = NULL,
+    title = "Stock prices of DOW index constituents"
+  ) +
+  theme(legend.position = "none")
+```
+
+## Calculating Summaries Stats For the Constituents {.smaller}
+
+```{r}
+#| output-location: slide
+all_returns <- index_prices |>
+  group_by(symbol) |>
+  mutate(ret = adjusted / lag(adjusted) - 1) |>
+  select(symbol, date, ret) |>
+  drop_na(ret)
+
+all_returns |>
+  group_by(symbol) |>
+  summarize(across(
+    ret,
+    list(
+      daily_mean = mean,
+      daily_sd = sd,
+      daily_min = min,
+      daily_max = max
+    ),
+    .names = "{.fn}"
+  )) |>
+  print(n = Inf)
+```
+
+## Other Indices
+
+Note that you are now also equipped with all tools to download price data for *each* symbol listed in the S&P 500 index with the same number of lines of code. Just use `symbol <- tq_index("SP500")`, which provides you with a tibble that contains each symbol that is (currently) part of the S&P 500. However, don't try this if you are not prepared to wait for a couple of minutes because this is quite some data to download!
+
+## Other Forms of Data Aggregation
+
+```{r}
+#| output-location: slide
+trading_volume <- index_prices |>
+  group_by(date) |>
+  summarize(trading_volume = sum(volume * adjusted))
+
+trading_volume |>
+  ggplot(aes(x = date, y = trading_volume)) +
+  geom_line() +
+  labs(
+    x = NULL, y = NULL,
+    title = "Aggregate daily trading volume of DOW index constitutens"
+  ) +
+    scale_y_continuous(labels = unit_format(unit = "B", scale = 1e-9))
+
+```
+
+## Persistence of high-volume trading days
+```{r}
+#| output-location: slide
+trading_volume |>
+  ggplot(aes(x = lag(trading_volume), y = trading_volume)) +
+  geom_point(alpha=0.1) +
+  geom_abline(aes(intercept = 0, slope = 1),
+    linetype = "dashed"
+  ) +
+  labs(
+    x = "Previous day aggregate trading volume",
+    y = "Aggregate trading volume",
+    title = "Persistence in daily trading volume of DOW index constituents"
+  ) + 
+  scale_x_continuous(labels = unit_format(unit = "B", scale = 1e-9)) +
+  scale_y_continuous(labels = unit_format(unit = "B", scale = 1e-9))
+```
+
+
+# Portfolio Choice Problems
+
+## Optimal Portfolio
+
+The standard framework for optimal portfolio selection considers investors that prefer higher future returns but dislike future return volatility (defined as the square root of the return variance)
+
+## Effificient Frontier
+
+the set of portfolios which satisfies the condition that no other portfolio exists with a higher expected return but with the same volatility (the square root of the variance, i.e., the risk)
+
+## Calculating Monthly Returns
+
+```{r}
+#| output-location: slide
+index_prices <- index_prices |>
+  group_by(symbol) |>
+  mutate(n = n()) |>
+  ungroup() |>
+  filter(n == max(n)) |>
+  select(-n)
+
+returns <- index_prices |>
+  mutate(month = floor_date(date, "month")) |>
+  group_by(symbol, month) |>
+  summarize(price = last(adjusted), .groups = "drop_last") |>
+  mutate(ret = price / lag(price) - 1) |>
+  drop_na(ret) |>
+  select(-price)
+
+returns
+```
+
+## Transform Data For Analysis
+
+Next, we transform the returns from a tidy tibble into a $(T \times N)$ matrix with one column for each of the $N$ symbols and one row for each of the $T$ trading days 
+
+```{r}
+returns_matrix <- returns |>
+  pivot_wider(
+    names_from = symbol,
+    values_from = ret
+  ) |>
+  select(-month)
+```
+
+
+## Sample Average Return Vector
+
+to compute the sample average return vector $$\hat\mu = \frac{1}{T}\sum\limits_{t=1}^T r_t$$ where $r_t$ is the $N$ vector of returns on date $t$
+
+```{r}
+mu <- colMeans(returns_matrix)
+```
+
+
+## Sample Covariance Matrix
+$$\hat\Sigma = \frac{1}{T-1}\sum\limits_{t=1}^T (r_t - \hat\mu)(r_t - \hat\mu)'.$$ 
+```{r}
+sigma <- cov(returns_matrix)
+```
+
+## Minimum Variance Portfolio Weights
+
+The minimum variance portfolio is the vector of portfolio weights that are the solution to $$\omega_\text{mvp} = \arg\min \omega'\Sigma \omega \text{ s.t. } \sum\limits_{i=1}^N\omega_i = 1.$$ The constraint that weights sum up to one simply implies that all funds are distributed across the available asset universe, i.e., there is no possibility to retain cash.
+
+The solution to the above equation is $\omega_\text{mvp} = \frac{\Sigma^{-1}\iota}{\iota'\Sigma^{-1}\iota}$, where $\iota$ is a vector of ones and $\Sigma^{-1}$ is the inverse of $\Sigma$.
+
+## Calculating MVP Weights
+
+```{r}
+N <- ncol(returns_matrix)
+iota <- rep(1, N)
+sigma_inv <- solve(sigma)
+mvp_weights <- sigma_inv %*% iota
+mvp_weights <- mvp_weights / sum(mvp_weights)
+```
+
+The command `solve(A, b)` returns the solution of a system of equations $Ax = b$. If `b` is not provided, as in the example above, it defaults to the identity matrix such that `solve(sigma)` delivers $\Sigma^{-1}$ (if a unique solution exists).
+
+## Expected Portfolio Return and Volatility
+
+-   **expected portfolio return**: $\omega_\text{mvp}'\mu$ 
+-   **expected portfolio volatility**: $\sqrt{\omega_\text{mvp}'\Sigma\omega_\text{mvp}}$
+
+```{r}
+tibble(
+  average_ret = as.numeric(t(mvp_weights) %*% mu),
+  volatility = as.numeric(sqrt(t(mvp_weights) %*% sigma %*% mvp_weights))
+)
+```
+
+## Finding MVP for any return
+
+choose $\omega_\text{eff}$ as the solution to $$\omega_\text{eff}(\bar{\mu}) = \arg\min \omega'\Sigma \omega \text{ s.t. } \omega'\iota = 1 \text{ and } \omega'\mu \geq \bar{\mu}.$$
+
+## Solving for 3x return
+
+The code below implements the analytic solution to this optimization problem for a benchmark return $\bar\mu$, which is set to 3 times the expected return of the minimum variance portfolio. 
+
+```{r}
+benchmark_multiple <- 3
+mu_bar <- benchmark_multiple * t(mvp_weights) %*% mu
+C <- as.numeric(t(iota) %*% sigma_inv %*% iota)
+D <- as.numeric(t(iota) %*% sigma_inv %*% mu)
+E <- as.numeric(t(mu) %*% sigma_inv %*% mu)
+lambda_tilde <- as.numeric(2 * (mu_bar - D / C) / (E - D^2 / C))
+efp_weights <- mvp_weights +
+  lambda_tilde / 2 * (sigma_inv %*% mu - D * mvp_weights)
+```
+
+## using calculated efp_weights
+```{r}
+tibble(
+  average_ret = as.numeric(t(efp_weights) %*% mu),
+  volatility = as.numeric(sqrt(t(efp_weights) %*% sigma %*% efp_weights))
+)
+```
+
+# The Efficient Frontier
+
+## Mutual Fund Seperation Theroem
+
+The mutual fund separation theorem states that as soon as we have two efficient portfolios (such as the minimum variance portfolio $\omega_\text{mvp}$ and the efficient portfolio for a higher required level of expected returns $\omega_\text{eff}(\bar{\mu})$, we can characterize the entire efficient frontier by combining these two portfolios. That is, any linear combination of the two portfolio weights will again represent an efficient portfolio. 
+
+## Calculating the Efficient Frontier
+
+```{r}
+length_year <- 12
+a <- seq(from = -0.4, to = 1.9, by = 0.01)
+res <- tibble(
+  a = a,
+  mu = NA,
+  sd = NA
+)
+for (i in seq_along(a)) {
+  w <- (1 - a[i]) * mvp_weights + (a[i]) * efp_weights
+  res$mu[i] <- length_year * t(w) %*% mu   
+  res$sd[i] <- sqrt(length_year) * sqrt(t(w) %*% sigma %*% w)
+}
+```
+
+## Explaining the Code
+
+The code above proceeds in two steps: First, we compute a vector of combination weights $a$ and then we evaluate the resulting linear combination with $a\in\mathbb{R}$:\
+$$\omega^* = a\omega_\text{eff}(\bar\mu) + (1-a)\omega_\text{mvp} = \omega_\text{mvp} + \frac{\lambda^*}{2}\left(\Sigma^{-1}\mu -\frac{D}{C}\Sigma^{-1}\iota \right)$$ with $\lambda^* = 2\frac{a\bar\mu + (1-a)\tilde\mu - D/C}{E-D^2/C}$ where $C = \iota'\Sigma^{-1}\iota$, $D=\iota'\Sigma^{-1}\mu$, and $E=\mu'\Sigma^{-1}\mu$.
+
+## Visualizing the Efficient Frontier {.smaller}
+
+```{r}
+#| output-location: slide
+res |>
+  ggplot(aes(x = sd, y = mu)) +
+  geom_point() +
+  geom_point(
+    data = res |> filter(a %in% c(0, 1)),
+    size = 4
+  ) +
+  geom_text(
+    data = tibble(
+      ticker = colnames(returns_matrix),
+      mu = length_year * mu,       
+      sd = sqrt(length_year) * sqrt(diag(sigma))
+    ),
+    aes(y = mu, x = sd, label=ticker), size = 3
+  ) +
+  labs(
+    x = "Annualized standard deviation",
+    y = "Annualized expected return",
+    title = "Efficient frontier for DOW index constituents"
+  ) +
+  scale_x_continuous(labels = percent) +
+  scale_y_continuous(labels = percent)
+```
+
+## Explaining the Efficient Frontier
+
+The line in the prior lot indicates the efficient frontier: the set of portfolios a mean-variance efficient investor would choose from. Compare the performance relative to the individual assets (the dots) - it should become clear that diversifying yields massive performance gains (at least as long as we take the parameters $\Sigma$ and $\mu$ as given).

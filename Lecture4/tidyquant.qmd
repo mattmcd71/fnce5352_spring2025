@@ -289,7 +289,8 @@ returns
 
 ## Transform Data For Analysis
 
-Next, we transform the returns from a tidy tibble into a $(T \times N)$ matrix with one column for each of the $N$ symbols and one row for each of the $T$ trading days 
+Next, we transform the returns from a tidy tibble into a $(T \times N)$ matrix with one column for each of the $N$ symbols and one row for each of the $T$ months
+
 
 ```{r}
 returns_matrix <- returns |>
@@ -364,6 +365,82 @@ lambda_tilde <- as.numeric(2 * (mu_bar - D / C) / (E - D^2 / C))
 efp_weights <- mvp_weights +
   lambda_tilde / 2 * (sigma_inv %*% mu - D * mvp_weights)
 ```
+
+## What's going on there?
+
+## Define Target Return Multiple
+
+```r
+benchmark_multiple <- 3
+```
+- We set the **benchmark multiple** to 3.
+- This means the new portfolio should have an **expected return three times** that of the GMV portfolio.
+
+---
+
+## Compute Target Expected Return
+
+```r
+mu_bar <- benchmark_multiple * t(mvp_weights) %*% mu
+```
+- $\mu_{\text{GMV}} = w_{\text{GMV}} \cdot \mu$
+- $\mu_{\text{bar}} = 3 \times \mu_{\text{GMV}}$
+- This sets the **target expected return**.
+
+---
+
+## Compute Constants for Efficient Frontier
+
+```r
+C <- as.numeric(t(iota) %*% sigma_inv %*% iota)
+D <- as.numeric(t(iota) %*% sigma_inv %*% mu)
+E <- as.numeric(t(mu) %*% sigma_inv %*% mu)
+```
+- $C = 1^T \Sigma^{-1} 1$ (Normalization constant)
+- $D = 1^T \Sigma^{-1} \mu$ (Return-weighted sum)
+- $E = \mu^T \Sigma^{-1} \mu$ (Risk-adjusted return)
+
+---
+
+## Understanding \( C \), \( D \), and \( E \)
+
+- These constants are derived from **mean-variance portfolio optimization** and define the **efficient frontier**.
+- $C = 1^T \Sigma^{-1} 1$
+  - Measures total **risk-adjusted exposure** of an equal-weighted portfolio.
+  - Ensures that portfolio weights sum to one.
+- $D = 1^T \Sigma^{-1} \mu$
+  - Represents the **risk-adjusted expected returns** of the portfolio.
+  - Helps determine the **trade-off between risk and return**.
+
+---
+
+- $E = \mu^T \Sigma^{-1} \mu$
+  - Measures the **risk-adjusted total expected return**.
+  - Helps find the optimal portfolio maximizing return per unit of risk.
+- These constants are key to computing **efficient frontier portfolios** and adjusting weights for **minimum variance solutions**.
+
+---
+
+## Compute Lambda Scaling Factor
+
+```r
+lambda_tilde <- as.numeric(2 * (mu_bar - D / C) / (E - D^2 / C))
+```
+- Computes the **scaling factor** to adjust the GMV portfolio along the efficient frontier.
+- $\lambda_\text{tilde}$ adjusts the portfolio to reach the desired return while maintaining minimum variance.
+
+---
+
+## Compute Final Portfolio Weights
+
+```r
+efp_weights <- mvp_weights +
+  lambda_tilde / 2 * (sigma_inv %*% mu - D * mvp_weights)
+```
+- **Adjusts the GMV portfolio weights** using the efficient frontier equation.
+- Moves along the efficient frontier to achieve the **3× return target**.
+
+---
 
 ## using calculated efp_weights
 ```{r}

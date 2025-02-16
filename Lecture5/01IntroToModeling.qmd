@@ -1,0 +1,169 @@
+---
+title: "Intro To Modeling"
+author: "Matthew McDonald"
+format: 
+  revealjs:
+    slide-number: true
+execute: 
+  echo: true
+  eval: true
+  warning: false
+editor: source
+---
+
+## What is machine learning?
+
+![](https://imgs.xkcd.com/comics/machine_learning.png){fig-align="center"}
+
+::: footer
+<https://xkcd.com/1838/>
+:::
+
+## What is machine learning?
+
+![](images/what_is_ml.jpg){fig-align="center"}
+
+::: footer
+Illustration credit: <https://vas3k.com/blog/machine_learning/>
+:::
+
+## What is machine learning?
+
+![](images/ml_illustration.jpg){fig-align="center"}
+
+::: footer
+Illustration credit: <https://vas3k.com/blog/machine_learning/>
+:::
+
+## Why R For Modeling? {.smaller}
+
+::: columns
+::: {.column width="50%"}
+-   R has cutting edge models.
+
+    -   Machine learning developers in some domains use R as their primary computing environment and their work often results in R packages.
+
+-   R and R packages are built by people who do data analysis.
+
+-   The S language is very mature.
+:::
+
+::: {.column width="50%"}
+-   It is easy to port or link to other applications.
+
+    -   R doesn't try to be everything to everyone. If you prefer models implemented in C, C++, tensorflow, keras, python, stan, or Weka, you can access these applications without leaving R.
+
+-   The machine learning environment in R is extremely rich.
+:::
+:::
+
+## Downsides to Modeling in R {.smaller}
+
+::: columns
+
+::: {.column width="50%"}
+-   R is a data analysis language and is not C or Java. If a high performance deployment is required, R can be treated like a prototyping language.
+
+-   R is mostly memory-bound. There are plenty of exceptions to this though.
+
+:::
+
+::: {.column width="50%"}
+-   The main issue is one of consistency of interface. For example:
+
+    -   There are two methods for specifying what terms are in a model1. Not all models have both.
+    -   99% of model functions automatically generate dummy variables.
+    -   Sparse matrices can be used (unless they can't).
+:::
+
+:::
+
+## Syntax for Computing Predicted Class Probabilities
+
+![](images/syntax.png){fig-align="center"}
+
+## What is tidymodels? {.smaller}
+
+tidymodels is a collection of packages.
+
+```{r}
+#| message: true
+library(tidymodels)
+```
+
+## The Modeling Process {.smaller}
+
+Common steps during model building are:
+
+-   estimating model parameters (i.e. training models)
+
+-   determining the values of tuning parameters that cannot be directly calculated from the data
+
+-   model selection (within a model type) and model comparison (between types)
+
+-   calculating the performance of the final model that will generalize to new data
+
+Many books and courses portray predictive modeling as a short sprint. A better analogy would be a marathon or campaign (depending on how hard the problem is).
+
+## What the Modeling Process Usually Looks Like
+
+![](images/process.png){fig-align="center"}
+
+## What Are We Doing With The Data? {.smaller}
+
+We often think of the model as the only real data analysis step in this process.
+
+However, there are other procedures that are often applied before or after the model fit that are data-driven and have an impact.
+
+If we only think of the model as being important, we might end up accidentally overfitting to the data in-hand. This is very similar to the problem of "p-hacking".
+
+![](images/modelflow1.png){fig-align="center"}
+
+## Define The Data Analysis Process {.smaller}
+
+tidymodels conceptualizes a workflow that involves all of the steps where the data are analyzed in a significant way. The includes the model but might also include other estimation steps:
+
+-   data preparation steps (e.g. imputation, encoding, transformations, etc)
+-   selection of which terms go into the model
+-   and so on.    
+
+![](images/modelflow2.png){fig-align="center"}
+
+
+
+## The Ames Housing Data
+
+The data set contains information on 2,930 properties in Ames, Iowa, including columns related to:
+
+-   house characteristics (bedrooms, garage, fireplace, pool, porch, etc.)
+-   location (neighborhood)
+-   lot information (zoning, shape, size, etc.)
+-   ratings of condition and quality
+-   sale price
+
+## Loading the Ames Data set
+
+```{r}
+library(modeldata) # This is also loaded by the tidymodels package
+data(ames)
+
+dim(ames)
+```
+
+## Sale Price
+
+```{r}
+library(ggplot2)
+ 
+ggplot(ames, aes(x = Sale_Price)) + 
+  geom_histogram(bins = 50, col= "white")
+```
+
+## Log Sale Price
+
+```{r}
+ggplot(ames, aes(x = Sale_Price)) + 
+  geom_histogram(bins = 50, col= "white") +
+  scale_x_log10()
+```
+

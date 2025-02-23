@@ -1,0 +1,507 @@
+---
+title: "Resampling"
+author: "Matthew McDonald"
+subtitle: "(based on tmwr.org)"
+format: 
+  revealjs:
+    slide-number: true
+execute: 
+  echo: true
+  eval: true
+  warning: false
+editor: source
+---
+
+```{r resampling-setup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(kableExtra)
+library(tidyr)
+tidymodels_prefer()
+
+source("ames_snippets.R")
+load("RData/lm_fit.RData")
+```
+
+## Resampling
+
+-   We have already covered the idea of data spending, and we recommended the test set for obtaining an unbiased estimate of performance.
+
+-   However, we usually need to understand the performance of a model or even multiple models *before using the test set*.
+
+-   **Resampling** is a technique for creating estimates of performance can generalize to new data in a similar way as estimates from a test set.
+
+## Dangers of Overfitting
+
+```{r}
+#| echo: false
+#| fig-align: 'center'
+knitr::include_graphics('images/tuning-overfitting-train-1.svg')
+```
+
+
+## Dangers of Overfitting
+
+```{r}
+#| echo: false
+#| fig-align: 'center'
+knitr::include_graphics('images/tuning-overfitting-test-1.svg')
+```
+
+We call this "resubstitution" or "repredicting the training set"
+
+. . .
+
+What if we want to compare more models?
+
+. . .
+
+And/or more model configurations?
+
+. . .
+
+And we want to understand if these are important differences?
+
+## Resubstitution Example
+
+When we measure performance on the same data that we used for training (as opposed to new data or testing data), we say we have *resubstituted* the data.
+
+We can compare the linear model we built in the Feature Engineering section to a model created using a different algorithm called *Random forests*.
+
+## Random Forests {.smaller}
+
+-   **Random forests**: A tree ensemble method that operates by creating a large number of decision trees from slightly different versions of the training set.
+-   When predicting a new sample, each ensemble member makes a separate prediction that are averaged to create the final ensemble prediction for the new data point.
+-   Can emulate the underlying data patterns very closely.
+-   Computationally intensive
+-   Low maintenance; very little preprocessing is required
+
+## Creating the Random Forest Model
+
+```{r resampling-rand-forest-spec}
+#| cache: true
+rf_model <- 
+  rand_forest(trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_wflow <- 
+  workflow() %>% 
+  add_formula(
+    Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+      Latitude + Longitude) %>% 
+  add_model(rf_model) 
+
+rf_fit <- rf_wflow %>% fit(data = ames_train)
+```
+
+## A Function to Evaluate Performance
+
+```{r resampling-eval-func}
+estimate_perf <- function(model, dat) {
+  # Capture the names of the `model` and `dat` objects
+  cl <- match.call()
+  obj_name <- as.character(cl$model)
+  data_name <- as.character(cl$dat)
+  data_name <- gsub("ames_", "", data_name)
+  
+  # Estimate these metrics:
+  reg_metrics <- metric_set(rmse, rsq)
+  
+  model %>%
+    predict(dat) %>%
+    bind_cols(dat %>% select(Sale_Price)) %>%
+    reg_metrics(Sale_Price, .pred) %>%
+    select(-.estimator) %>%
+    mutate(object = obj_name, data = data_name)
+}
+```
+
+## Comparing Models
+
+::: columns
+::: {.column width="50%}
+
+```{r resampling-eval-train}
+estimate_perf(rf_fit, 
+              ames_train)
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+estimate_perf(lm_fit, 
+              ames_train)
+```
+:::
+
+:::
+
+## Using the Random Forest on the Test Data
+
+```{r resampling-eval-train-results, include = FALSE}
+all_res <- 
+  bind_rows(
+    estimate_perf(lm_fit, ames_train),
+    estimate_perf(rf_fit, ames_train),
+    estimate_perf(lm_fit, ames_test),
+    estimate_perf(rf_fit, ames_test)
+  ) %>% filter(.metric == "rmse") %>% 
+  select(-.metric) %>% 
+  pivot_wider(id_cols = object,
+              values_from = ".estimate",
+              names_from = "data")
+
+tr_ratio <- round(all_res$train[1]/all_res$train[2])
+```
+
+```{r resampling-eval-test-rf}
+estimate_perf(rf_fit, ames_test)
+```
+
+. . .
+
+Wait...what happened? The Random Forest Model got way **worse**!
+
+## Low Bias Models {.smaller}
+
+-   Many predictive models are capable of learning complex trends from the data. In statistics, these are commonly referred to as *low bias models*.
+
+-   *bias* is the difference between the true pattern or relationships in data and the types of patterns that the model can emulate. Many black-box machine learning models have low bias, meaning they can reproduce complex relationships.
+
+-   Other models (such as linear/logistic regression, discriminant analysis, and others) are not as adaptable and are considered *high bias* models.
+
+-   For a low bias model, the high degree of predictive capacity can sometimes result in the model nearly memorizing the training set data.
+
+## Summary of Model Performance {.smaller}
+
+For both models, The following table summarizes the RMSE estimate for the training and test sets:
+
+```{r resampling-rmse-table, echo = FALSE, results = "asis"}
+all_res %>% 
+#  mutate(object = paste0("<tt>", object, "</tt>")) %>% 
+  kable(
+    caption = "Performance statistics for training and test sets.",
+    label = "rmse-results",
+    escape = FALSE
+  ) %>% 
+  kable_styling(full_width = FALSE) %>% 
+  add_header_above(c(" ", "RMSE Estimates" = 2))
+```
+
+::: notes
+If the test set should not be used immediately, and repredicting the training set is a bad idea, what should be done? Resampling methods, such as cross-validation or validation sets, are the solution.
+:::
+
+## Resampling
+
+-   **Resampling methods**: Empirical simulation systems that emulate the process of using some data for modeling and different data for evaluation.
+-   Mostly iterative processes repeated multiple times.
+
+## Resampling Visualization
+
+```{r resampling-scheme}
+#| echo: FALSE
+#| warning: FALSE
+#| fig-cap: "Data splitting scheme from the initial data split to resampling"
+knitr::include_graphics("images/resampling.svg")
+```
+
+## Resampling {.smaller}
+
+Resampling is conducted only on the training set. The test set is not involved. For each iteration of resampling, the data are partitioned into two subsamples:
+
+-   The model is fit with the *analysis set*.
+
+-   The model is evaluated with the *assessment set*.
+
+These two subsamples are somewhat analogous to training and test sets. The language of *analysis* and *assessment* avoids confusion with the initial split of the data. These data sets are mutually exclusive. The partitioning scheme used to create the analysis and assessment sets is usually the defining characteristic of the method.
+
+## Using Resampled Data {.smaller}
+
+-   Suppose 20 iterations of resampling are conducted.
+-   20 separate models are fit on the analysis sets
+-   The corresponding assessment sets produce 20 sets of performance statistics.
+-   The final estimate of performance for a model is the average of the 20 replicates of the statistics.
+-   This average has very good generalization properties and is far better than the resubstitution estimates.
+
+## Cross-validation {#cv}
+
+-   **Cross-validation**: A well established resampling method
+-   Most common cross-validation method is *V*-fold cross-validation
+-   Data are randomly partitioned into *V* sets of roughly equal size (called the **folds**)
+-   Stratified sampling is also an option for assigning folds
+
+## V = 3
+
+```{r cross-validation-allocation}
+#| echo = FALSE, 
+#| out.width = '50%', 
+#| warning = FALSE,
+#| fig.cap = "V-fold cross-validation randomly assigns data to folds",
+#| fig.alt = "A diagram of how V-fold cross-validation randomly assigns data to folds (where V equals three). A set of thirty data points are assigned to three groups of roughly the same size."
+knitr::include_graphics("images/three-CV.svg")
+```
+
+## Using the Folds
+
+```{r cross-validation}
+#| echo = FALSE, 
+#| out.width = '70%', 
+#| warning = FALSE,
+#| fig.cap = "V-fold cross-validation data usage",
+#| fig.alt = "A diagram of V-fold cross-validation data usage (where V equals three). For each of the three groups, the data for the fold are held out for performance while the other two are used for modeling."
+knitr::include_graphics("images/three-CV-iter.svg")
+```
+
+::: notes
+When *V* = 3, the analysis sets are 2/3 of the training set and each assessment set is a distinct 1/3. The final resampling estimate of performance averages each of the *V* replicates.
+:::
+
+## Choosing V
+
+-   Values of *V* are most often 5 or 10
+-   10-fold cross-validation is preferred as a default because it is large enough for good results in most situations
+-   Larger values for *V* result in resampling estimates with small bias but substantial variance
+-   Smaller values of *V* have large bias but low variance
+-   10-fold is preferred since noise is reduced by replication, but bias is not
+
+## Cross Validation with rsample
+
+```{r resampling-ames-cv}
+set.seed(1001)
+ames_folds <- vfold_cv(ames_train, v = 10)
+ames_folds
+```
+
+```{r resampling-cv-printing, echo=FALSE}
+ames_first_split <- ames_folds$splits[[1]]
+```
+
+## Retrieving the Resampled Data {.smaller}
+
+The `analysis()` and `assessment()` functions return the corresponding data frames:
+
+```{r resampling-analysis}
+# For the first fold:
+ames_folds$splits[[1]] %>% analysis() %>% dim()
+```
+
+The functions that use the resampled data contain high-level user interfaces so that functions like `analysis()` are not generally needed for day-to-day work.
+
+## Repeated Cross-Validation
+
+-   The most important variation on cross-validation
+-   Depending on data size or other characteristics, the resampling estimate produced by *V*-fold cross-validation may be excessively noisy
+-   One way to reduce noise is to gather more data. For cross-validation, this means averaging more than *V* statistics
+
+## Repeated Cross-Validation
+
+-   To create *R* repeats of *V*-fold cross-validation, the same fold generation process is done *R* times to generate *R* collections of *V* partitions.
+
+-   Instead of averaging *V* statistics, $V \times R$ statistics produce the final resampling estimate.
+
+-   Due to the Central Limit Theorem, the summary statistics from each model tend toward a normal distribution, as long as we have a lot of data relative to $V \times R$.
+
+## Impact in the Ames Analysis
+
+-   On average, 10-fold cross-validation uses assessment sets that contain roughly `r floor(nrow(ames_train) * .1)` properties
+-   If RMSE is the statistic of choice, we can denote that estimate's standard deviation as $\sigma$
+-   With simple 10-fold cross-validation, the standard error of the mean RMSE is $\sigma/\sqrt{10}$
+-   Repeats reduce the standard error to $\sigma/\sqrt{10R}$
+
+## Reducing the Noise
+
+```{r variance-reduction}
+#| echo: FALSE
+#| fig-height: 4
+#| fig-cap: "Relationship between the relative variance in performance estimates versus the number of cross-validation repeats"
+
+y_lab <- expression(Multiplier ~ on ~ sigma)
+
+cv_info <- 
+  tibble(replicates = rep(1:10, 2), V = 10) %>% 
+  mutate(B = V * replicates, reduction = 1/B, V = format(V))
+
+ggplot(cv_info, aes(x = replicates, y = reduction)) + 
+  geom_line() + 
+  geom_point() + 
+  labs(
+    y = y_lab,
+    x = "Number of 10F-CV Replicates"
+  ) +
+  theme_bw() + 
+  scale_x_continuous(breaks = 1:10)
+```
+
+## Creating Repeated Cross Validation Datasets
+
+```{r resampling-repeated}
+vfold_cv(ames_train, v = 10, repeats = 5)
+```
+
+## Bootstrapping {.smaller}
+
+-   **Bootstrap sample**: a sample that is the same size as the training set but is drawn *with replacement*
+-   Some training set data points are selected multiple times for the analysis set
+-   Each data point has a `r round((1-exp(-1)) * 100, 1)`% chance of inclusion in the training set at least once
+-   The assessment set contains all of the training set samples that were not selected for the analysis set (on average, with `r round((exp(-1)) * 100, 1)`% of the training set)
+-   When bootstrapping, the assessment set is often called the *out-of-bag* sample
+-   Originally invented as a method for approximating the sampling distribution of statistics whose theoretical properties are intractable
+-   Produce performance estimates that have very low variance (unlike cross-validation) but have significant pessimistic bias
+
+## Bootstrapping
+
+```{r bootstrapping}
+#| echo: FALSE
+#| warning: FALSE
+#| fig.cap: "Bootstrapping data usage"
+
+knitr::include_graphics("images/bootstraps.svg")
+```
+
+## Creating a Bootstrap Sample
+
+Using the `rsample` package, we can create such bootstrap resamples:
+
+```{r resampling-boot-set}
+bootstraps(ames_train, times = 5)
+```
+
+## Rolling forecasting origin resampling
+
+-   **Rolling forecast origin resampling**: Estimates the model with historical data and evaluating it with the most recent data.
+-   The size of the initial analysis and assessment sets are specified.
+-   The first iteration of resampling uses these sizes, starting from the beginning of the series.
+-   The second iteration uses the same data sizes but shifts over by a set number of samples.
+
+## Rolling forecasting origin resampling
+
+```{r rolling}
+#| echo: FALSE
+#| warning: FALSE
+#| fig.cap: "Data usage for rolling forecasting origin resampling"
+
+knitr::include_graphics("images/rolling.svg")
+```
+
+## Rolling forecasting origin resampling {.smaller}
+
+Two different configurations of this method:
+
+-   The analysis set can cumulatively grow (as opposed to remaining the same size). After the first initial analysis set, new samples can accrue without discarding the earlier data.
+
+-   The resamples need not increment by one. For example, for large data sets, the incremental block could be a week or month instead of a day.
+
+For a year's worth of data, suppose that six sets of 30-day blocks define the analysis set. For assessment sets of 30 days with a 29-day skip, we can use the `rsample` package to specify
+
+## Implementation
+
+```{r resampling-rolling-forcast}
+time_slices <- 
+  tibble(x = 1:365) %>% 
+  rolling_origin(initial = 6 * 30, 
+                 assess = 30, 
+                 skip = 29, 
+                 cumulative = FALSE)
+
+data_range <- function(x) {
+  summarize(x, first = min(x), last = max(x))
+}
+```
+
+## Implementation
+
+::: columns
+::: {.column width="50%"}
+```{r}
+map_dfr(time_slices$splits,
+        ~   analysis(.x) %>% 
+          data_range())
+```
+:::
+
+::: {.column width="50%"}
+```{r}
+map_dfr(time_slices$splits, 
+        ~ assessment(.x) %>% 
+          data_range())
+```
+:::
+:::
+
+## Other Resampling Approaches {.smaller}
+
+-   Leave One Out Cross-Validation
+    -   Extreme version of V-fold cross-validation where the assessment sets are only 1 observation
+-   Monte Carlo Cross-Validation
+    -   Like V-fold cross-validation, it allocates a fixed proportion of data to the assessment sets. The difference between MCCV and regular cross-validation is that, for MCCV, this proportion of the data is randomly selected each time
+-   Validation Set
+    -   A single partition that is set aside to estimate performance separate from the test set
+
+## Estimating Performance {.smaller}
+
+Resampling methods are effective because different groups of data are used to train the model and assess the model. To reiterate, the process to use resampling is:
+
+1.  During resampling, the analysis set is used to preprocess the data, apply the preprocessing to itself, and use these processed data to fit the model.
+
+2.  The preprocessing statistics produced by the analysis set are applied to the assessment set. The predictions from the assessment set estimate performance on new data.
+
+This sequence repeats for every resample. If there are *B* resamples, there are *B* replicates of each of the performance metrics. The final resampling estimate is the average of these *B* statistics.\
+
+## Resampling Usage
+
+```{r resampling-usage, eval = FALSE}
+model_spec %>% fit_resamples(formula,  resamples, ...)
+model_spec %>% fit_resamples(recipe,   resamples, ...)
+workflow   %>% fit_resamples(          resamples, ...)
+```
+
+## Optional Arguments
+
+There are a number of other optional arguments, such as:
+
+-   `metrics`: A metric set of performance statistics to compute. By default, regression models use RMSE and $R^2$ while classification models compute the area under the ROC curve and overall accuracy.
+
+-   `control`: A list created by `control_resamples()` with various options.
+
+## Control Options
+
+-   `verbose`: A logical for printing logging.
+
+-   `extract`: A function for retaining objects from each model iteration (discussed later in this chapter).
+
+-   `save_pred`: A logical for saving the assessment set predictions.
+
+## Resampled Performance of RF Model
+
+```{r resampling-cv-ames}
+#| cache: true
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+set.seed(1003)
+rf_res <- 
+  rf_wflow %>% 
+  fit_resamples(resamples = ames_folds, control = keep_pred)
+rf_res
+```
+
+## Return Values
+
+The return value is a tibble similar to the input resamples, along with some extra columns:
+
+-   `.metrics` is a list column of tibbles containing the assessment set performance statistics.
+
+-   `.notes` is another list column of tibbles cataloging any warnings or errors generated during resampling. Note that errors will not stop subsequent execution of resampling.
+
+-   `.predictions` is present when `save_pred = TRUE`. This list column contains tibbles with the out-of-sample predictions.
+
+## Using the resampled Results
+
+```{r resampling-cv-stats}
+collect_metrics(rf_res)
+```
+
+These are the resampling estimates averaged over the individual replicates. To get the metrics for each resample, use the option `summarize = FALSE`.
+
+Notice how much more realistic the performance estimates are than the resubstitution estimates.

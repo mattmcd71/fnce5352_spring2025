@@ -1,0 +1,435 @@
+---
+title: "Feature Engineering"
+author: "Matthew McDonald"
+subtitle: "(based on tmwr.org)"
+format: 
+  revealjs:
+    slide-number: true
+execute: 
+  echo: true
+  eval: true
+  warning: false
+editor: source
+---
+
+```{r engineering-setup, include = FALSE}
+library(tidymodels)
+library(kableExtra)
+
+tidymodels_prefer()
+
+val_list <- function(x) {
+  x <- format(table(x), big.mark = ",")
+  x <- paste0("`", names(x), "` ($n = ", unname(x), "$)")
+  knitr::combine_words(x)
+}
+
+source("ames_snippets.R")
+
+lm_wflow <- 
+  lm_wflow %>% 
+  remove_recipe() %>% 
+  add_variables(outcome = Sale_Price, predictors = c(Longitude, Latitude))
+```
+
+## What is Feature Engineering
+
+-   Reformatting predictor values to make them easier for a model to use effectively.
+
+-   Includes transformations and encodings of the data to best represent their important characteristics.
+
+## Ames Data
+
+Take the location of a house in Ames as a more involved example.
+
+Ways that this spatial information can be exposed to a model:
+
+-   neighborhood (a qualitative measure)
+-   longitude/latitude
+-   distance to the nearest school or Iowa State University
+
+## Other Examples {.smaller}
+
+-   Some algorithms are sensitive to correlated predictor variables.
+
+    -   Remedy: feature extraction (PCA) or the removal of some predictors.
+
+-   Some algorithms cannot handle missing data.
+
+    -   Remedy: Imputation (which can be a sub-model)
+
+-   Some algorithms are sensitive to skewed data (outliers)
+
+    -   Remedy: Variable Transformation (skewed -\> symmetric)
+
+-   Some model algorithms use geometric distance metrics
+
+    -   Remedy: Numeric predictors must be centered and scaled so that they are all in the same units.
+
+-   Some model algorithms are sensitive to class imbalances
+
+    -   Remedy: Upsampling/Downsampling the data.
+
+## Useful List of Required Feature Engineering
+
+<https://www.tmwr.org/pre-proc-table#pre-proc-table>
+
+## recipes
+
+-   A package for data preparation included in tidymodels
+-   Combine different feature engineering and preprocessing tasks into a single object and then apply these transformations to different data sets.
+
+## Preprocessing the Ames Data {.smaller}
+
+A simple regression for estimating sale price:
+
+```{r engineering-ames-simple-formula, eval = FALSE}
+lm(Sale_Price ~ Neighborhood + log10(Gr_Liv_Area) + Year_Built + Bldg_Type, data = ames)
+```
+
+Incorporates:
+
+-   The neighborhood (qualitative, with `r length(levels(ames_train$Neighborhood))` neighborhoods in the training set)
+
+-   The gross above-grade living area (continuous, named `Gr_Liv_Area`)
+
+-   The year built (`Year_Built`)
+
+-   The type of building (`Bldg_Type` with values `r val_list(ames_train$Bldg_Type)`)
+
+-   Note: Sale Price has already been transformed by log10()
+
+::: notes
+When this function is executed, the data are converted from a data frame to a numeric *design matrix* (also called a *model matrix*) and then the least squares method is used to estimate parameters. In Section \@ref(formula) we listed the multiple purposes of the R model formula; let's focus only on the data manipulation aspects for now. What this formula does can be decomposed into a series of steps:
+
+1.  Sale price is defined as the outcome while neighborhood, gross living area, the year built, and building type variables are all defined as predictors.
+
+2.  A log transformation is applied to the gross living area predictor.
+
+3.  The neighborhood and building type columns are converted from a non-numeric format to a numeric format (since least squares requires numeric predictors).
+:::
+
+## Simple recipe for Ames Data {.smaller}
+
+```{r engineering-ames-simple-recipe}
+#| warning: true
+library(tidymodels) # Includes the recipes package
+tidymodels_prefer()
+
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_dummy(all_nominal_predictors())
+simple_ames
+```
+
+::: notes
+Let's break this down:
+
+1.  The call to `recipe()` with a formula tells the recipe the *roles* of the "ingredients" or variables (e.g., predictor, outcome). It only uses the data `ames_train` to determine the data types for the columns.
+
+2.  `step_log()` declares that `Gr_Liv_Area` should be log transformed.
+
+3.  `step_dummy()` specifies which variables should be converted from a qualitative format to a quantitative format, in this case, using dummy or indicator variables. An indicator or dummy variable is a binary numeric variable (a column of ones and zeroes) that encodes qualitative information; we will dig deeper into these kinds of variables in Section \@ref(dummies).
+
+The function `all_nominal_predictors()` captures the names of any predictor columns that are currently factor or character (i.e., nominal) in nature. This is a dplyr-like selector function similar to `starts_with()` or `matches()` but that can only be used inside of a recipe.
+
+Other selectors specific to the recipes package are: `all_numeric_predictors()`, `all_numeric()`, `all_predictors()`, and `all_outcomes()`. As with dplyr, one or more unquoted expressions, separated by commas, can be used to select which columns are affected by each step.
+:::
+
+## Advantages of recipes {.smaller}
+
+-   These computations can be recycled across models since they are not tightly coupled to the modeling function.
+
+-   A recipe enables a broader set of data processing choices than formulas can offer.
+
+-   The syntax can be very compact. For example, `all_nominal_predictors()` can be used to capture many variables for specific types of processing while a formula would require each to be explicitly listed.
+
+-   All data processing can be captured in a single R object instead of in scripts that are repeated, or even spread across different files.
+
+## How Data Are Used by the `recipe()` {.smaller}
+
+Data are passed to recipes at different stages.
+
+-   When calling `recipe(..., data)`, the data set is used to determine the data types of each column
+
+-   When preparing the data using `fit(workflow, data)`, the training data are used for all estimation operations including a recipe that may be part of the `workflow`
+
+    -   Example: determining factor levels to computing PCA components
+
+-   When using `predict(workflow, new_data)`, no model or preprocessor parameters like those from recipes are re-estimated using the values in `new_data`.
+
+    -   Example: Centering and scaling using `step_normalize()`
+
+        -   Means and standard deviations are determined from the training set; new samples at prediction time are standardized using these values from training when `predict()` is invoked.
+
+## Using recipes {.smaller}
+
+```{r}
+#| echo: false
+lm_wflow <- 
+  lm_wflow %>% 
+  remove_variables()
+```
+
+This object can be attached to a workflow:
+
+```{r workflows-fail, error = TRUE}
+lm_wflow <- lm_wflow %>% 
+  add_recipe(simple_ames)
+
+lm_wflow
+```
+
+## Fitting and Predicting {.smaller}
+
+```{r workflows-recipe-fit}
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+The `predict()` method applies the same preprocessing that was used on the training set to the new data before passing them along to the model's `predict()` method:
+
+```{r workflows-recipe-pred, message = FALSE, warning = FALSE}
+predict(lm_fit, ames_test %>% slice(1:3))
+```
+
+## Centering and Scaling {.smaller}
+
+-   **Purpose of Centering:** Adjusts each feature to have a mean of zero, removing the mean value from each observation to center the data around the origin.
+
+-   **Purpose of Scaling:** Adjusts the scale of the features so that they all have the same standard deviation or variance, typically resulting in each feature having a unit variance.
+
+-   **Benefits:** Helps in faster convergence of algorithms, reduces the impact of differing scales among features, and can improve model accuracy and interpretability.
+
+-   `step_normalize()` implements centering and scaling within the recipes framework
+
+## Dummy Variables {.smaller}
+
+Transforming nominal or qualitative data (factors or characters) so that they can be encoded or represented numerically.
+
+-   `step_unknown()` can be used to change missing values to a dedicated factor level.
+-   `step_novel()` can allot a new level if we anticipate that a new factor level may be encountered in future data
+-   `step_other()` can be used to analyze the frequencies of the factor levels in the training set and convert infrequently occurring values to a catch-all level of "other,"
+
+## Ames Neighborhoods
+
+```{r ames-neighborhoods, echo = FALSE}
+#| fig.cap = "Frequencies of neighborhoods in the Ames training set",
+#| fig.alt = "A bar chart of the frequencies of neighborhoods in the Ames training set. The most homes are in North Ames while the Greens, Green Hills, and Landmark neighborhood have very few instances."
+ggplot(ames_train, aes(y = Neighborhood)) + 
+  geom_bar() + 
+  labs(y = NULL)
+```
+
+## Ames Dummy Variables
+
+For the Ames data, we can amend the recipe to use:
+
+```{r engineering-ames-recipe-other}
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors())
+```
+
+## Dummy Variable Example {.smaller}
+
+Encoding Bldg_Type Variable:
+
+```{r engineering-all-dummies, echo = FALSE, results = 'asis'}
+show_rows <- 
+  ames_train %>% 
+  mutate(.row = row_number()) %>% 
+  group_by(Bldg_Type) %>% dplyr::select(Bldg_Type, .row) %>% 
+  slice(1) %>% 
+  pull(.row)
+recipe(~Bldg_Type, data = ames_train) %>% 
+  step_mutate(`Raw Data` = Bldg_Type) %>% 
+  step_dummy(Bldg_Type, naming = function(var, lvl, ordinal = FALSE, sep = "_") lvl) %>% 
+  prep() %>% 
+  bake(ames_train) %>% 
+  slice(show_rows) %>% 
+  arrange(`Raw Data`) %>% 
+  kable(
+    caption = 'Illustration of binary encodings (i.e., dummy variables) for a qualitative predictor.',
+    label = "dummy-vars"
+  ) %>% 
+  kable_styling(full_width = FALSE)
+```
+
+::: notes
+The most common method for converting a factor predictor to a numeric format is to create dummy or indicator variables. Let's take the predictor in the Ames data for the building type, which is a factor variable with five levels . For dummy variables, the single `Bldg_Type` column would be replaced with four numeric columns whose values are either zero or one. These binary variables represent specific factor level values. In R, the convention is to exclude a column for the first factor level (`OneFam`, in this case). The `Bldg_Type` column would be replaced with a column called `TwoFmCon` that is one when the row has that value and zero otherwise. Three other columns are similarly created:
+
+Why not all five? The most basic reason is simplicity; if you know the value for these four columns, you can determine the last value because these are mutually exclusive categories. More technically, the classical justification is that a number of models, including ordinary linear regression, have numerical issues when there are linear dependencies between columns. If all five building type indicator columns are included, they would add up to the intercept column (if there is one). This would cause an issue, or perhaps an outright error, in the underlying matrix algebra.
+:::
+
+## Interaction terms
+
+-   Interaction effects involve two or more predictors.
+-   Such an effect occurs when one predictor has an effect on the outcome that is contingent on one or more other predictors.
+-   Numerically, an interaction term between predictors is encoded as their product.
+
+## Interactions in Ames {.smaller}
+
+After exploring the Ames training set, we might find that the regression slopes for the gross living area differ for different building types.
+
+```{r engineering-ames-feature-plots}
+#| output-location: slide
+ggplot(ames_train, aes(x = Gr_Liv_Area, y = 10^Sale_Price)) + 
+  geom_point(alpha = .2) + 
+  facet_wrap(~ Bldg_Type) + 
+  geom_smooth(method = lm, formula = y ~ x, se = FALSE, color = "lightblue") + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  labs(x = "Gross Living Area", y = "Sale Price (USD)")
+```
+
+## Coding Interactions in R Formulas
+
+``` r
+Sale_Price ~ Neighborhood + log10(Gr_Liv_Area) + Bldg_Type + 
+  log10(Gr_Liv_Area):Bldg_Type
+# or
+Sale_Price ~ Neighborhood + log10(Gr_Liv_Area) * Bldg_Type 
+```
+
+## Coding Interactions Using recipes
+
+```{r engineering-ames-interact-recipe}
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  # Gr_Liv_Area is on the log scale from a previous step
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") )
+```
+
+## Spline functions {.smaller}
+
+-   Splines help model non-linear relationships
+-   Some types of predictive modeling algorithms can adaptively approximate nonlinearity during training.
+-   It is not uncommon to try to use a simple model, such as a linear fit, and add in specific nonlinear features for predictors that may need them
+-   Splines replace the existing numeric predictor with a set of columns that allow a model to emulate a flexible, nonlinear relationship.
+-   As more spline terms are added to the data, the capacity to nonlinearly represent the relationship increases.
+-   Unfortunately, it may also increase the likelihood of picking up on data trends that occur by chance (i.e., overfitting).
+
+## NonLinearity in the Ames Data
+
+```{r engineering-ames-splines}
+#| fig.cap: "Sale price versus latitude, with trend lines using natural splines with different degrees of freedom"
+#| echo: false
+library(patchwork)
+library(splines)
+
+plot_smoother <- function(deg_free) {
+  ggplot(ames_train, aes(x = Latitude, y = 10^Sale_Price)) + 
+    geom_point(alpha = .2) + 
+    scale_y_log10() +
+    geom_smooth(
+      method = lm,
+      formula = y ~ ns(x, df = deg_free),
+      color = "lightblue",
+      se = FALSE
+    ) +
+    labs(title = paste(deg_free, "Spline Terms"),
+         y = "Sale Price (USD)")
+}
+
+( plot_smoother(2) + plot_smoother(5) ) / ( plot_smoother(20) + plot_smoother(100) )
+```
+
+## Adding a Spline Function to the Recipe {.smaller}
+
+The `ns()` function in the `splines` package generates feature columns using functions called *natural splines*.
+
+`step_ns` implements a spline fitting step into our model preprocessing.
+
+```{r engineering-spline-rec, eval = FALSE}
+recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + Latitude,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, deg_free = 20)
+```
+
+## Feature Extraction {.smaller}
+
+-   *feature extraction*: Techniques creating new features from the predictors that capture the information in the broader set as a whole.
+-   Principal Component Analysis (PCA) tries to extract as much of the original information in the predictor set as possible using a smaller number of features.
+    -   Each new feature in PCA is a linear combination of the original predictors.
+    -   Each of the new features are uncorrelated with one another.
+    -   PCA can be very effective at reducing the correlation between predictors.
+    -   Note: PCA is only aware of the predictors; the new PCA features might not be associated with the outcome.
+
+## Applying PCA to the Ames recipe {.smaller}
+
+-   In the Ames data, several predictors measure size of the property, such as the total basement size (`Total_Bsmt_SF`), size of the first floor (`First_Flr_SF`), the gross living area (`Gr_Liv_Area`).\
+-   PCA might be an option to represent these potentially redundant variables as a smaller feature set.
+
+``` r
+  # Use a regular expression to capture house size predictors: 
+  step_pca(matches("(SF$)|(Gr_Liv)"), num_comp = 3)
+```
+
+Note that all of these columns are measured in square feet. PCA assumes that all of the predictors are on the same scale. That's true in this case, but often this step can be preceded by `step_normalize()`, which will center and scale each column.
+
+## Alternative Feature Extraction Methods
+
+-   independent component analysis (ICA),
+-   non-negative matrix factorization (NNMF),
+-   multidimensional scaling (MDS),
+-   uniform manifold approximation and projection (UMAP)
+
+## Class Imbalances {.smaller}
+
+Techniques for class imbalances change the class proportions in the data being given to the mode
+
+-   *Downsampling* the data keeps the minority class and takes a random sample of the majority class so that class frequencies are balanced. (`step_downsample()` in the *themis* package)
+-   *Upsampling* replicates samples from the minority class to balance the classes. Some techniques do this by synthesizing new samples that resemble the minority class data while other methods simply add the same minority samples repeatedly. (`step_upsample()` in the *themis* package)
+-   *Hybrid methods* do a combination of both. (available in the *themis* package)
+
+## Other Preprocessing Steps
+
+A complete list of preprocessing steps is available at:
+
+<https://recipes.tidymodels.org/reference/index.html>
+
+Additionally, the framework is flexible enough to create your own recipes if needed (kind of a big lift, though)
+
+## Using Recipes to Model Ames {.smaller}
+
+```{r engineering-summary, eval = FALSE}
+library(tidymodels)
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+  
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```

@@ -1,0 +1,283 @@
+---
+title: "Tuning Parameters"
+author: "Matthew McDonald"
+subtitle: "(based on tmwr.org)"
+format: 
+  revealjs:
+    slide-number: true
+execute: 
+  echo: true
+  eval: true
+  warning: false
+editor: source
+---
+
+```{r tuning-setup, include = FALSE}
+
+library(tidymodels)
+library(patchwork)
+library(ggforce)
+
+tidymodels_prefer()
+
+## -----------------------------------------------------------------------------
+
+source("ames_snippets.R")
+
+## -----------------------------------------------------------------------------
+
+data(two_class_dat)
+
+set.seed(91)
+split <- initial_split(two_class_dat)
+
+training_set <- training(split)
+testing_set  <-  testing(split)
+
+data_grid <- crossing(A = seq(0.4, 4, length = 200), B = seq(.14, 3.9, length = 200))
+
+## -----------------------------------------------------------------------------
+
+load("RData/search_examples.RData")
+
+
+```
+
+## Hyperparamters
+
+-   Some parameters required for prediction can be estimated directly from the training data,
+-   Other parameters, called *tuning parameters* or *hyperparameters*, must be specified ahead of time and can't be directly found from training data.
+-   These are unknown structural or other kind of values that have significant impact on the model.
+
+## OLS Model Parameters {.smaller}
+
+In ordinary linear regression, there are two parameters $\beta_0$ and $\beta_1$ of the model:
+
+$$ y_i = \beta_0 + \beta_1 x_i + \epsilon_i$$
+
+When we have the outcome ($y$) and predictor ($x$) data, we can estimate the two parameters $\beta_0$ and $\beta_1$:
+
+$$\hat \beta_1 = \frac{\sum_i (y_i-\bar{y})(x_i-\bar{x})}{\sum_i(x_i-\bar{x})^2}$$
+
+and
+
+$$\hat \beta_0 = \bar{y}-\hat \beta_1 \bar{x}.$$
+
+## K-Nearest Neighbor Model
+
+K-nearest neighbors stores the training set (including the outcome).
+
+When a new sample is predicted, K training set points are found that are most similar to the new sample being predicted.
+
+The predicted value for the new sample is some summary statistic of the neighbors, usually:
+
+-   the mean for regression, or
+-   the mode for classification.
+
+## KNN Model Parameters {.smaller}
+
+For the KNN model, the prediction equation for a new value $x_0$ is
+
+$$\hat y = \frac{1}{K}\sum_{\ell = 1}^K x_\ell^*$$
+
+-   $K$ is the number of neighbors and the $x_\ell^*$ are the $K$ closest values to $x_0$ in the training set.
+-   The model itself is not defined by a model equation
+-   The number of neighbors has a profound impact on the model; it governs the flexibility of the class boundary.
+-   For small values of $K$, the boundary is very elaborate while for large values, it might be quite smooth.
+
+## Note on KNN Model
+
+Since the model is measuring distance, we typically should add a pre-processing step to center and scale all numeric parameters to ensure they're on the same scale.
+
+## Fitting a KNN Model to Ames {.smaller}
+
+```{r}
+#| cache: true
+knn_mod <- 
+  nearest_neighbor(neighbors = 5) %>% 
+  set_engine("kknn") %>% 
+  set_mode("regression")
+
+# since Longitude and Latitude are already on the same scale, 
+# we can get away without centering and scaling
+knn_wflow <- 
+  workflow() %>% 
+  add_formula(Sale_Price ~ Longitude + Latitude) %>%
+  add_model(knn_mod)  
+
+set.seed(1001)
+ames_folds <- vfold_cv(ames_train, v = 10)
+
+knn_fit <- knn_wflow %>% fit_resamples(resamples = ames_folds)
+collect_metrics(knn_fit)
+```
+
+## Setting K = 100 {.smaller}
+
+```{r}
+#| cache: true
+knn_mod <- 
+  nearest_neighbor(neighbors = 100) %>% 
+  set_engine("kknn") %>% 
+  set_mode("regression")
+
+knn_wflow <- 
+  knn_wflow %>%
+  remove_model() %>%
+  add_model(knn_mod)  
+
+knn_fit <- knn_wflow %>% fit_resamples(resamples = ames_folds)
+collect_metrics(knn_fit)
+
+```
+
+# What is the Best Choice for K?
+
+## The tune() Function {.smaller}
+
+How can we signal to tidymodels functions which arguments should be optimized?  Parameters are marked for tuning by assigning them a value of `tune()`. 
+
+The `tune()` function doesn't execute any particular parameter value; it only returns an expression: 
+
+```{r tuning-tune-exprs}
+tune()
+```
+
+Embedding this `tune()` value in an argument will tag the parameter for optimization. 
+
+## Tuning our KNN Model
+
+```{r}
+#| output-location: slide
+#| cache: true
+knn_mod <- 
+  nearest_neighbor(neighbors = tune('K')) %>% 
+  set_engine("kknn") %>% 
+  set_mode("regression")
+
+knn_wflow <- 
+  knn_wflow %>%
+  remove_model() %>%
+  add_model(knn_mod)  
+
+knn_tune <- knn_wflow %>% tune_grid(resamples = ames_folds,
+                                   grid = tibble(K=1:20),
+                                   metrics=metric_set(rmse))
+collect_metrics(knn_tune) 
+
+```
+
+## Plotting the Results
+
+```{r}
+autoplot(knn_tune)
+```
+
+## Selecting the Best Parameters
+
+```{r}
+knn_best <- select_best(knn_tune)
+knn_best
+```
+
+## Getting the Best Model for Prediction {.smaller}
+
+```{r}
+knn_final <-
+  knn_wflow %>%
+  finalize_workflow(knn_best)
+
+knn_final
+```
+Note: Once we have this "final" model, we would still need to fit it with the **entire** training data set in order to then use it for prediction.
+
+## Other Tuning Parameters {.smaller}
+
+-   Boosting is an ensemble method that combines a series of base models, each of which is created sequentially and depends on the previous models
+
+    -   The number of boosting iterations is a tuning parameter
+
+-   In single-layer artificial neural network, the predictors are combined using two or more hidden units. The hidden units are linear combinations of the predictors that are captured in an *activation function* (typically a nonlinear function, such as a sigmoid).
+
+    -   The number of hidden units and the type of activation are tuning parameters.
+
+-   Modern gradient descent methods are improved by finding the right optimization parameters.
+
+    -   Examples of such hyperparameters are learning rates, momentum, and the number of optimization iterations/epochs.
+
+    -   Neural networks and some ensemble models use gradient descent to estimate the model parameters.
+
+## Tuning Preprocessing Steps {.smaller}
+
+-   In principal component analysis, the predictors are replaced with new, artificial features that have better properties related to collinearity.
+
+    -   The number of extracted components can be tuned.
+
+-   Imputation methods estimate missing predictor values using the complete values of one or more predictors. One effective imputation tool uses $K$-nearest neighbors of the complete columns to predict the missing value.
+
+    -   The number of neighbors can be tuned.
+
+## Tuning Structural Parameters {.smaller}
+
+-   In binary regression, the logit link is commonly used (i.e., logistic regression). Other link functions, such as the probit and complementary log-log, are also available and can be tuned.
+
+-   Non-Bayesian longitudinal and repeated measures models require a specification for the covariance or correlation structure of the data. Options include compound symmetric (a.k.a. exchangeable), autoregressive, Toeplitz, and others, which can be tuned.
+
+## Two general strategies for optimization
+
+Tuning parameter optimization usually falls into one of two categories: _grid search_ and _iterative search_. 
+
+## Grid Search {.smaller}
+
+-   _Grid search_ is when we predefine a set of parameter values to evaluate
+-   The main choices involved in grid search are how to make the grid and how many parameter combinations to evaluate
+-   Grid search is often judged as inefficient since the number of grid points required to cover the parameter space can become unmanageable with the curse of dimensionality
+-   Lots of times it gets the job done
+
+## Iterative Search
+
+-   _Iterative search_ or sequential search is when we sequentially discover new parameter combinations based on previous results
+-   Almost any nonlinear optimization method is appropriate, although some are more efficient than others. 
+-   In some cases, an initial set of results for one or more parameter combinations is required to start the optimization process. 
+
+## Visualizing the Two Approaches
+
+```{r tuning-strategies}
+#| echo: FALSE
+#| fig-cap: "Examples of pre-defined grid tuning and an iterative search method. The lines represent contours of a performance metric; it is best in the upper-right-hand side of the plot."
+grid_plot <-
+  ggplot(sfd_grid, aes(x = x, y = y)) +
+  geom_point() +
+  lims(x = 0:1, y = 0:1) +
+  labs(x = "Parameter 1", y = "Parameter 2", title = "Space-Filling Grid") +
+  geom_contour(data = grid_contours,
+               aes(z = obj),
+               alpha = .3,
+               bins = 12) +
+  coord_equal() +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+search_plot <-
+  ggplot(nm_res, aes(x = x, y = y)) +
+  geom_point(size = .7)  +
+  lims(x = 0:1, y = 0:1) +
+  labs(x = "Parameter 1", y = "Parameter 2", title = "Global Search") +
+  coord_equal()  +
+  geom_contour(data = grid_contours,
+               aes(x = x, y = y, z = obj),
+               alpha = .3,
+               bins = 12) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+grid_plot + search_plot
+```
+
+::: notes
+The left-hand panel shows a type of grid called a space-filling design. This is a type of experimental design devised for covering the parameter space such that tuning parameter combinations are not close to one another. The results for this design do not place any points exactly at the truly optimal location. However, one point is in the general vicinity and would probably have performance metric results that are within the noise of the most optimal value. 
+
+The right-hand panel illustrates the results of a global search method: the Nelder-Mead simplex method. The starting point is in the lower-left part of the parameter space. The search meanders across the space until it reaches the optimum location, where it strives to come as close as possible to the numerically best value. This particular search method, while effective, is not known for its efficiency; it requires many function evaluations, especially near the optimal values. 
+:::
